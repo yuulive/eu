@@ -25,8 +25,6 @@ fn add(x: u32, y: u32) -> i64 {
 // which would expand to
 
 ``` rust
-struct add;
-
 stuct PartialApplyAdd<X,Y> {
 	x: Option<FnOnce() -> u32>,
 	y: Option<FnOnce() -> u32>,
