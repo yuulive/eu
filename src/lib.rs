@@ -1,6 +1,15 @@
+#![feature(proc_macro_diagnostic)]
+extern crate proc_macro;
+use proc_macro::TokenStream;
+use quote::quote;
+use syn;
+use syn::spanned::Spanned;
+
+#[cfg(test)]
+mod example;
 #[cfg(test)]
 mod tests {
-    use crate::add1;
+    use crate::example::add1;
     #[test]
     fn it_works() {
         let a = add1();
@@ -10,126 +19,103 @@ mod tests {
     }
 }
 
-use std::marker::PhantomData;
-use std::ops::FnOnce;
-
-struct Added;
-struct Empty;
-
-struct PartialAdd1<X, XFN, Y, YFN, BODYFN>
-where
-    XFN: FnOnce() -> u32,
-    YFN: FnOnce() -> u32,
-    BODYFN: FnOnce(u32, u32) -> u32,
-{
-    x_m: PhantomData<X>,
-    x: Option<XFN>,
-    y_m: PhantomData<Y>,
-    y: Option<YFN>,
-    body: BODYFN,
+#[proc_macro_attribute]
+pub fn show_streams(attr: TokenStream, item: TokenStream) -> TokenStream {
+    println!("attr: \"{}\"", attr.to_string());
+    println!("item: \"{}\"", item.to_string());
+    item
 }
 
-fn add1<X, Y>() -> PartialAdd1<Empty, X, Empty, Y, impl FnOnce(u32, u32) -> u32>
-where
-    X: FnOnce() -> u32,
-    Y: FnOnce() -> u32,
-{
-    PartialAdd1 {
-        x: None,
-        x_m: PhantomData,
-        y: None,
-        y_m: PhantomData,
-        body: |x, y| x + y,
+#[proc_macro_attribute]
+pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let func_item: syn::Item = syn::parse(item).expect("failed to parse input");
+    if !attr.is_empty() {
+        func_item
+            .span()
+            .unstable()
+            .error("No attributes accepted")
+            .emit()
     }
-}
 
-impl<XFN: FnOnce() -> u32, YFN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> u32, Y>
-    PartialAdd1<Empty, XFN, Y, YFN, BODYFN>
-{
-    fn x(mut self, x: XFN) -> PartialAdd1<Added, XFN, Y, YFN, BODYFN> {
-        self.x = Some(x);
-        unsafe {
-            // maybe should cast with a raw pointer conversion instead
-            // this might not be optimized out
-            std::mem::transmute_copy::<
-                PartialAdd1<Empty, XFN, Y, YFN, BODYFN>,
-                PartialAdd1<Added, XFN, Y, YFN, BODYFN>,
-            >(&self)
+    match func_item {
+        syn::Item::Fn(ref func) => {
+            let name = get_name(func);
+            let predicate =
+                syn::Ident::new(&format!("__PartialApplication__{}_", name), name.span());
+            // TODO: maybe these should be public if the original function is
+            // itself public
+            println!("predicate: {}", predicate);
+            let body = &func.block;
+            let func_struct = main_struct(&predicate, &func.sig.inputs, &func.sig.output);
+            println!("struct: {}", func_struct);
         }
+        _ => func_item
+            .span()
+            .unstable()
+            .error("Only functions can be partially applied, for structs use the builder pattern")
+            .emit(),
     }
+    let out = quote! { #func_item };
+    out.into()
 }
 
-impl<XFN: FnOnce() -> u32, YFN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> u32, X>
-    PartialAdd1<X, XFN, Empty, YFN, BODYFN>
-{
-    fn y(mut self, y: YFN) -> PartialAdd1<X, XFN, Added, YFN, BODYFN> {
-        self.y = Some(y);
-        unsafe {
-            // maybe should cast with a raw pointer conversion instead
-            // this might not be optimized out
-            std::mem::transmute_copy::<
-                PartialAdd1<X, XFN, Empty, YFN, BODYFN>,
-                PartialAdd1<X, XFN, Added, YFN, BODYFN>,
-            >(&self)
+fn get_name<'a>(func: &'a syn::ItemFn) -> &'a syn::Ident {
+    if let Some(r) = &func.sig.receiver() {
+        r.span()
+            .unstable()
+            .error("Cannot make methods partially applicable yet")
+            .emit();
+    }
+    &func.sig.ident
+}
+
+fn main_struct<'a>(
+    name: &'a syn::Ident,
+    args: &'a syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>,
+    ret_type: &'a syn::ReturnType,
+) -> proc_macro::TokenStream {
+    let arg_vec: Vec<_> = args
+        .iter()
+        .map(|fn_arg| match fn_arg {
+            syn::FnArg::Receiver(_) => panic!("should filter out reciever arguments"),
+            syn::FnArg::Typed(t) => t,
+        })
+        .collect();
+
+    let arg_types: Vec<_> = arg_vec
+        .iter()
+        .map(|f| {
+            let ty = &f.ty;
+            syn::Ident::new(&format!("{}", quote!(#ty)), f.span())
+        })
+        .collect();
+
+    let arg_names: Vec<_> = arg_vec
+        .iter()
+        .map(|f| {
+            let f_pat = &f.pat;
+            syn::Ident::new(&format!("{}", quote!(#f_pat)), f.span())
+        })
+        .collect();
+
+    let arg_augmented_only: Vec<_> = arg_names
+        .iter()
+        .map(|f| syn::Ident::new(&format!("{}___FN", quote!(#f)), f.span()))
+        .collect();
+
+    // iterators are consumed in one use
+    let iter1 = arg_names.iter();
+    let iter2 = arg_augmented_only.iter();
+    let iter3 = arg_types.iter();
+    let iter4 = arg_types.iter();
+    let iter5 = arg_augmented_only.iter();
+    TokenStream::from(quote!(
+        struct #name <#(#iter1, #iter2,)*BODYFN>
+        where
+            #(#iter5: FnOnce() -> #iter3,)*
+            BODYFN: FnOnce(#(#iter4,)*) #ret_type,
+        {
+            stuff
         }
-    }
+    ))
 }
-
-impl<XFN: FnOnce() -> u32, YFN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> u32>
-    PartialAdd1<Added, XFN, Added, YFN, BODYFN>
-{
-    fn call(self) -> u32 {
-        (self.body)(self.x.unwrap()(), self.y.unwrap()())
-    }
-}
-// struct PartialApplyAdd<X, Y, Body, X_func, Y_func>
-// where
-//     Body: Fn(u32, u32) -> i64,
-//     X_func: Fn() -> u32,
-//     Y_func: Fn() -> u32,
-// {
-//     x: Option<X_func>,
-//     y: Option<Y_func>,
-//     body: Body,
-//     x_m: PhantomData<X>,
-//     y_m: PhantomData<Y>,
-// }
-
-// fn add() -> PartialApplyAdd<(), (), dyn Fn(u32, u32) -> i64, dyn Fn() -> u32, dyn Fn() -> u32> {
-//     PartialApplyAdd {
-//         x: None,
-//         y: None,
-//         body: |x, y| x + y,
-//         x_m: PhantomData,
-//         y_m: PhantomData,
-//     }
-// }
-
-// impl<X> PartialApplyAdd<X, (), dyn Fn(u32, u32) -> i64, dyn Fn() -> u32, dyn Fn() -> u32> {
-//     fn y(
-//         mut self,
-//         y: dyn FnOnce() -> u32,
-//     ) -> PartialApplyAdd<X, bool, dyn Fn(u32, u32) -> i64, dyn Fn() -> u32, dyn Fn() -> u32> {
-//         self.y = Some(y);
-//         unsafe { std::mem::transmute::<PartialApplyAdd<X, ()>, PartialApplyAdd<X, bool>>(self) }
-//     }
-// }
-
-// impl<Y> PartialApplyAdd<(), Y, dyn Fn(u32, u32) -> i64, dyn Fn() -> u32, dyn Fn() -> u32> {
-//     fn x(
-//         self,
-//         x: dyn FnOnce() -> u32,
-//     ) -> PartialApplyAdd<bool, (), dyn Fn(u32, u32) -> i64, dyn Fn() -> u32, dyn Fn() -> u32> {
-//         self.x = Some(x);
-//         unsafe { std::mem::transmute::<PartialApplyAdd<(), Y>, PartialApplyAdd<bool, Y>>(self) }
-//     }
-// }
-
-// impl PartialApplyAdd<bool, bool, dyn Fn(u32, u32) -> i64, dyn Fn() -> u32, dyn Fn() -> u32> {
-//     fn call(self) -> i64 {
-//         self.body(self.x.unwrap()(), self.y.unwrap()())
-//     }
-// }
-
-// // This should provide compile time checking for partial application
-// // Then something like}
