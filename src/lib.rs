@@ -98,24 +98,25 @@ fn main_struct<'a>(
         })
         .collect();
 
-    let arg_augmented_only: Vec<_> = arg_names
+    let arg_augmented: Vec<_> = arg_names
         .iter()
         .map(|f| syn::Ident::new(&format!("{}___FN", quote!(#f)), f.span()))
         .collect();
 
+    let names_with_m: Vec<_> = arg_names
+        .iter()
+        .map(|f| syn::Ident::new(&format!("{}___m", quote!(#f)), f.span()))
+        .collect();
     // iterators are consumed in one use
-    let iter1 = arg_names.iter();
-    let iter2 = arg_augmented_only.iter();
-    let iter3 = arg_types.iter();
-    let iter4 = arg_types.iter();
-    let iter5 = arg_augmented_only.iter();
     TokenStream::from(quote!(
-        struct #name <#(#iter1, #iter2,)*BODYFN>
+        struct #name <#(#arg_names, #arg_augmented,)*BODYFN>
         where
-            #(#iter5: FnOnce() -> #iter3,)*
-            BODYFN: FnOnce(#(#iter4,)*) #ret_type,
+            #(#arg_augmented: FnOnce() -> #arg_types,)*
+            BODYFN: FnOnce(#(#arg_types,)*) #ret_type,
         {
-            stuff
+            #(#names_with_m: ::std::marker::PhantomData<#arg_names>,)*
+            #(#arg_names: Option<#arg_augmented>,)*
+            body: BODYFN,
         }
     ))
 }
