@@ -81,6 +81,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             out.extend(generator_func);
             out.extend(argument_calls);
             out.extend(final_call);
+
             TokenStream::from(out)
         }
         _ => {

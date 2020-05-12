@@ -1,4 +1,4 @@
-# Sketch for a library to turn functions in to partial application structs
+# Sketch for a macro to make functions partially applicable
 
 ## Example
 ``` rust
@@ -7,7 +7,7 @@ fn add(x: u32, y: u32) -> i64 {
 	(x + y) as i64
 }
 
-main() {
+fn main() {
 	println!("add: {}",add(1,2));
 }
 ```
@@ -20,9 +20,16 @@ supporting struct. This would look somthing like
 fn add(x: u32, y: u32) -> i64 {
 	(x + y) as i64
 }
+
+fn main() {
+	let a = add();
+	let two = a.x(|| 2);
+    let number = two.y(|| 40);
+    assert_eq!(number.call(), 42);
+}
 ```
 
-// which would expand to
+The `#[part_app]` would expand into somthing like this (edited for brevity). 
 
 ``` rust
 struct add___Added;
@@ -31,19 +38,19 @@ struct add___Empty;
 
 struct __PartialApplication__add_<x, x___FN, y, y___FN, BODYFN>
 where
-    x___FN: FnOnce() -> u32,
-    y___FN: FnOnce() -> u32,
+    xFN: FnOnce() -> u32,
+    yFN: FnOnce() -> u32,
     BODYFN: FnOnce(u32, u32) -> i64,
 {
-    x___m: ::std::marker::PhantomData<x>,
-    y___m: ::std::marker::PhantomData<y>,
-    x: Option<x___FN>,
-    y: Option<y___FN>,
+    xm: ::std::marker::PhantomData<x>,
+    ym: ::std::marker::PhantomData<y>,
+    x: Option<xFN>,
+    y: Option<yFN>,
     body: BODYFN,
 }
 
 fn add<x, y>(
-) -> __PartialApplication__add_<add___Empty, x, add___Empty, y, impl FnOnce(u32, u32) -> i64>
+) -> __PartialApplication__add_<addEmpty, x, addEmpty, y, impl FnOnce(u32, u32) -> i64>
 where
     x: FnOnce() -> u32,
     y: FnOnce() -> u32,
@@ -51,48 +58,48 @@ where
     __PartialApplication__add_ {
         x: None,
         y: None,
-        x___m: ::std::marker::PhantomData,
-        y___m: ::std::marker::PhantomData,
+        xm: ::std::marker::PhantomData,
+        ym: ::std::marker::PhantomData,
         body: |x, y| (x + y) as i64,
     }
 }
 
-impl<x___FN: FnOnce() -> u32, y___FN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> i64, y>
-    __PartialApplication__add_<add___Empty, x___FN, y, y___FN, BODYFN>
+impl<xFN: FnOnce() -> u32, yFN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> i64, y>
+    __PartialApplication__add_<addEmpty, xFN, y, yFN, BODYFN>
 {
     fn x(
         mut self,
-        x: x___FN,
-    ) -> __PartialApplication__add_<add___Added, x___FN, y, y___FN, BODYFN> {
+        x: xFN,
+    ) -> __PartialApplication__add_<addAdded, xFN, y, yFN, BODYFN> {
         self.x = Some(x);
         unsafe {
             ::std::mem::transmute_copy::<
-                __PartialApplication__add_<add___Empty, x___FN, y, y___FN, BODYFN>,
-                __PartialApplication__add_<add___Added, x___FN, y, y___FN, BODYFN>,
+                __PartialApplication__add_<addEmpty, xFN, y, yFN, BODYFN>,
+                __PartialApplication__add_<addAdded, xFN, y, yFN, BODYFN>,
             >(&self)
         }
     }
 }
 
-impl<x___FN: FnOnce() -> u32, y___FN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> i64, x>
-    __PartialApplication__add_<x, x___FN, add___Empty, y___FN, BODYFN>
+impl<xFN: FnOnce() -> u32, yFN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> i64, x>
+    __PartialApplication__add_<x, xFN, addEmpty, yFN, BODYFN>
 {
     fn y(
         mut self,
-        y: y___FN,
-    ) -> __PartialApplication__add_<x, x___FN, add___Added, y___FN, BODYFN> {
+        y: yFN,
+    ) -> __PartialApplication__add_<x, xFN, addAdded, yFN, BODYFN> {
         self.y = Some(y);
         unsafe {
             ::std::mem::transmute_copy::<
-                __PartialApplication__add_<x, x___FN, add___Empty, y___FN, BODYFN>,
-                __PartialApplication__add_<x, x___FN, add___Added, y___FN, BODYFN>,
+                __PartialApplication__add_<x, xFN, addEmpty, yFN, BODYFN>,
+                __PartialApplication__add_<x, xFN, addAdded, yFN, BODYFN>,
             >(&self)
         }
     }
 }
 
-impl<x___FN: FnOnce() -> u32, y___FN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> i64>
-    __PartialApplication__add_<add___Added, x___FN, add___Added, y___FN, BODYFN>
+impl<xFN: FnOnce() -> u32, yFN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> i64>
+    __PartialApplication__add_<addAdded, xFN, addAdded, yFN, BODYFN>
 {
     fn call(self) -> i64 {
         (self.body)(self.x.unwrap()(), self.y.unwrap()())
