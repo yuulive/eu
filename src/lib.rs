@@ -16,7 +16,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
     match func_item {
         syn::Item::Fn(ref func) => {
             let name = get_name(func);
-            let predicate =
+            let struct_name =
                 syn::Ident::new(&format!("__PartialApplication__{}_", name), name.span());
             // TODO: maybe these should be public if the original function is
             // itself public
@@ -35,7 +35,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
 
             let func_struct = main_struct(
-                &predicate,
+                &struct_name,
                 &argument_vector,
                 func_out,
                 &generics,
@@ -43,7 +43,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             );
 
             let generator_func = generator_func(
-                &predicate,
+                &struct_name,
                 name,
                 &argument_vector,
                 func_out,
@@ -60,7 +60,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             };
 
             let final_call = final_call(
-                &predicate,
+                &struct_name,
                 &argument_vector,
                 &func.sig.output,
                 &added_unit,
@@ -69,7 +69,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             );
 
             let argument_calls = argument_calls(
-                &predicate,
+                &struct_name,
                 &argument_vector,
                 &added_unit,
                 &empty_unit,
