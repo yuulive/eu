@@ -6,6 +6,7 @@ use quote::quote;
 use syn;
 use syn::spanned::Spanned;
 
+#[cfg(test)]
 mod example;
 #[cfg(test)]
 mod tests {
@@ -26,6 +27,7 @@ pub fn show_streams(attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Turns function into partially applicable functions.
 #[proc_macro_attribute]
 pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
     let func_item: syn::Item = syn::parse(item).expect("failed to parse input");
@@ -47,13 +49,15 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             let added_unit = concat_ident(name, "Added");
             let empty_unit = concat_ident(name, "Empty");
             let argument_vector = argument_vector(&func.sig.inputs);
+            let func_out = &func.sig.output;
 
-            let func_struct = main_struct(&predicate, &argument_vector, &func.sig.output);
+            let func_struct = main_struct(&predicate, &argument_vector, func_out);
+
             let generator_func = generator_func(
                 &predicate,
                 name,
                 &argument_vector,
-                &func.sig.output,
+                func_out,
                 &empty_unit,
                 &func.block,
             );
@@ -72,7 +76,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &argument_vector,
                 &added_unit,
                 &empty_unit,
-                &func.sig.output,
+                func_out,
             );
 
             // assemble output
@@ -93,6 +97,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 )
                 .emit();
             let out: proc_macro::TokenStream = quote! { #func_item }.into();
+            println!("{}", out);
             out
         }
     }
@@ -261,13 +266,8 @@ fn argument_vector<'a>(
 }
 
 /// Retrieves the identities of an the argument list
-fn arg_types<'a>(args: &Vec<&syn::PatType>) -> Vec<syn::Ident> {
-    args.iter()
-        .map(|f| {
-            let ty = &f.ty;
-            syn::Ident::new(&format!("{}", quote!(#ty)), f.span())
-        })
-        .collect()
+fn arg_types<'a>(args: &Vec<&'a syn::PatType>) -> Vec<&'a syn::Type> {
+    args.iter().map(|f| f.ty.as_ref()).collect()
 }
 
 fn augmented_argument_names<'a>(arg_names: &Vec<syn::Ident>) -> Vec<syn::Ident> {
