@@ -169,7 +169,7 @@ fn argument_calls<'a>(
             } else {
                 quote! {#(#associated_vals_in, #aug_arg_names,)*}
             };
-            let (transmute, self_type) = if opts.impl_poly {
+            let (transmute, self_type) = if opts.impl_poly || opts.impl_clone {
                 (quote!(transmute), quote!(self))
             } else {
                 // if by_value
@@ -484,12 +484,10 @@ impl MacroOptions {
                 .emit()
         }
 
-        if !self.impl_poly && self.impl_clone {
+        if self.impl_clone && !(self.impl_poly || self.by_value) {
             span.span()
                 .unstable()
-                .error(
-                    r##"Cannot implement "Clone" without "poly", try "#[part_app(poly,Clone)]""##,
-                )
+                .error(r#"Cannot implement "Clone" without "poly" or "value""#)
                 .emit()
         }
         if !self.attr.is_empty() && !self.impl_poly && !self.by_value && !self.impl_clone {

@@ -6,7 +6,7 @@ fn foo(bar: u32, baz: u64) -> i16 {
 }
 
 #[test]
-fn one_and_two() {
+fn poly_clone() {
     let adder = foo();
     let with_two = adder.bar(Box::new(|| 1));
 
@@ -68,4 +68,17 @@ fn value_add(x: u32, y: u32) -> i64 {
 fn by_value() {
     let adder = value_add().x(3);
     assert_eq!(adder.y(3).call(), 6);
+}
+
+#[part_app(value, Clone)]
+fn clone_value_add(x: u32, y: u32) -> u32 {
+    x + y
+}
+
+#[test]
+fn clone_value_test() {
+    let adder = clone_value_add();
+    let with_one = adder.x(1);
+    assert_eq!(with_one.clone().y(2).call(), 3);
+    assert_eq!(with_one.y(3).call(), 4);
 }
