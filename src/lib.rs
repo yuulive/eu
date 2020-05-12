@@ -17,18 +17,27 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
         .collect();
     let polymorphic = attributes.contains(&"poly".to_string());
     let impl_clone = attributes.contains(&"Clone".to_string());
+    let by_value = attributes.contains(&"value".to_string());
+    if polymorphic && by_value {
+        func_item
+            .span()
+            .unstable()
+            .error(r#"Cannot implement "poly" and "value" at the same time"#)
+            .emit()
+    }
+
     if !polymorphic && impl_clone {
         func_item
             .span()
             .unstable()
-            .error(r##"Cannot implement "Clone" without "poly". Try "#[part_app(poly,Clone)]""##)
+            .error(r##"Cannot implement "Clone" without "poly", try "#[part_app(poly,Clone)]""##)
             .emit()
     }
-    if !attr.is_empty() && !polymorphic {
+    if !attr.is_empty() && !polymorphic && !by_value && !impl_clone {
         func_item
             .span()
             .unstable()
-            .error(r#""poly" is the only accepted attribute"#)
+            .error(r#"Unknown attribute. Acceptable attributes are "poly", "Clone" and "value""#)
             .emit()
     }
 
@@ -60,6 +69,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &generics,
                 polymorphic,
                 impl_clone,
+                by_value,
             );
 
             let generator_func = generator_func(
@@ -71,6 +81,8 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &func.block,
                 &generics,
                 polymorphic,
+                impl_clone,
+                by_value,
             );
             let unit_structs = quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
@@ -86,6 +98,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &added_unit,
                 &generics,
                 polymorphic,
+                by_value,
             );
 
             let argument_calls = argument_calls(
@@ -96,6 +109,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 func_out,
                 &generics,
                 polymorphic,
+                by_value,
             );
 
             // assemble output
@@ -105,7 +119,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             out.extend(generator_func);
             out.extend(argument_calls);
             out.extend(final_call);
-
+            // println!("{}", out);
             TokenStream::from(out)
         }
         _ => {
@@ -127,10 +141,11 @@ fn impl_signature<'a>(
     ret_type: &'a syn::ReturnType,
     generics: &Vec<&syn::GenericParam>,
     poly: bool,
+    by_value: bool,
 ) -> proc_macro2::TokenStream {
     let arg_names = arg_names(&args);
     let arg_types = arg_types(&args);
-    let augmented_names = if !poly {
+    let augmented_names = if !(poly || by_value) {
         augmented_argument_names(&arg_names)
     } else {
         Vec::new()
@@ -153,8 +168,9 @@ fn argument_calls<'a>(
     ret_type: &'a syn::ReturnType,
     generics: &Vec<&syn::GenericParam>,
     poly: bool,
+    by_value: bool,
 ) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type, generics, poly);
+    let impl_sig = impl_signature(args, ret_type, generics, poly, by_value);
     let arg_name_vec = arg_names(args);
     let aug_arg_names = augmented_argument_names(&arg_name_vec);
     let arg_types = arg_types(&args);
@@ -175,7 +191,7 @@ fn argument_calls<'a>(
                     }
                 })
                 .collect();
-            let val_list_out = if poly {
+            let val_list_out = if poly || by_value {
                 quote! {#(#associated_vals_out,)*}
             } else {
                 quote! {#(#associated_vals_out, #aug_arg_names,)*}
@@ -184,7 +200,7 @@ fn argument_calls<'a>(
                 .iter()
                 .map(|x| if x == unit_added { unit_empty } else { x })
                 .collect();
-            let val_list_in = if poly {
+            let val_list_in = if poly || by_value {
                 quote! {#(#associated_vals_in,)*}
             } else {
                 quote! {#(#associated_vals_in, #aug_arg_names,)*}
@@ -192,15 +208,19 @@ fn argument_calls<'a>(
             let (transmute, self_type) = if poly {
                 (quote!(transmute), quote!(self))
             } else {
+                // if by_value
                 (quote!(transmute_copy), quote!(&self))
             };
             let some = if poly {
                 quote! {Some(::std::sync::Arc::from(#n))}
             } else {
+                // || by_value
                 quote! {Some(#n)}
             };
             let in_type = if poly {
                 quote! { Box<dyn Fn() -> #n_type> }
+            } else if by_value {
+                quote! {#n_type}
             } else {
                 quote! { #n_fn }
             };
@@ -233,14 +253,20 @@ fn final_call<'a>(
     unit_added: &'a syn::Ident,
     generics: &Vec<&syn::GenericParam>,
     poly: bool,
+    by_value: bool,
 ) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type, generics, poly);
+    let impl_sig = impl_signature(args, ret_type, generics, poly, by_value);
     let arg_names = arg_names(args);
     let aug_args = augmented_argument_names(&arg_names);
-    let arg_list: proc_macro2::TokenStream = if poly {
+    let arg_list: proc_macro2::TokenStream = if poly || by_value {
         aug_args.iter().map(|_| quote! {#unit_added,}).collect()
     } else {
         aug_args.iter().map(|a| quote! {#unit_added, #a,}).collect()
+    };
+    let call = if !by_value {
+        quote! {()}
+    } else {
+        quote! {}
     };
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
@@ -249,7 +275,7 @@ fn final_call<'a>(
             #struct_name<#(#generics,)* #arg_list BODYFN>
         {
             fn call(self) #ret_type { // final call
-                (self.body)(#(self.#arg_names.unwrap()(),)*)
+                (self.body)(#(self.#arg_names.unwrap()#call,)*)
             }
         }
     }
@@ -266,26 +292,28 @@ fn generator_func<'a>(
     body: &'a Box<syn::Block>,
     generics: &Vec<&syn::GenericParam>,
     poly: bool,
+    impl_clone: bool,
+    by_value: bool,
 ) -> proc_macro2::TokenStream {
     let arg_names = arg_names(&args);
     let arg_types = arg_types(&args);
     let marker_names = marker_names(&arg_names);
-    let gen_types = if poly {
+    let gen_types = if poly || by_value {
         quote! {#(#generics,)*}
     } else {
         quote! {#(#generics,)* #(#arg_names,)*}
     };
-    let struct_types = if poly {
+    let struct_types = if poly || by_value {
         arg_names.iter().map(|_| quote! {#empty_unit,}).collect()
     } else {
         quote! {#(#empty_unit,#arg_names,)*}
     };
-    let body_fn = if poly {
+    let body_fn = if poly || impl_clone {
         quote! {::std::sync::Arc::new(|#(#arg_names,)*| #body),}
     } else {
         quote! {|#(#arg_names,)*| #body,}
     };
-    let where_clause = if poly {
+    let where_clause = if poly || by_value {
         quote!()
     } else {
         quote! {
@@ -384,13 +412,14 @@ fn main_struct<'a>(
     generics: &Vec<&syn::GenericParam>,
     poly: bool,
     impl_clone: bool,
+    by_value: bool,
 ) -> proc_macro2::TokenStream {
     let arg_types = arg_types(&args);
 
     let arg_names = arg_names(&args);
     let arg_augmented = augmented_argument_names(&arg_names);
 
-    let arg_list: Vec<_> = if !poly {
+    let arg_list: Vec<_> = if !(poly || by_value) {
         arg_names
             .iter()
             .zip(arg_augmented.iter())
@@ -399,12 +428,12 @@ fn main_struct<'a>(
     } else {
         arg_names.iter().collect()
     };
-    let bodyfn = if poly {
+    let bodyfn = if poly || impl_clone {
         quote! {::std::sync::Arc<BODYFN>}
     } else {
         quote! { BODYFN }
     };
-    let where_clause = if poly {
+    let where_clause = if poly || by_value {
         quote!(BODYFN: Fn(#(#arg_types,)*) #ret_type,)
     } else {
         quote! {
@@ -413,14 +442,16 @@ fn main_struct<'a>(
         }
     };
     let names_with_m = marker_names(&arg_names);
-    let option_list = if !poly {
-        quote! {#(#arg_names: Option<#arg_augmented>,)*}
-    } else {
+    let option_list = if poly {
         quote! {#(#arg_names: Option<::std::sync::Arc<dyn Fn() -> #arg_types>>,)*}
+    } else if by_value {
+        quote! {#(#arg_names: Option<#arg_types>,)*}
+    } else {
+        quote! {#(#arg_names: Option<#arg_augmented>,)*}
     };
 
     let clone = if impl_clone {
-        let sig = impl_signature(args, ret_type, generics, poly);
+        let sig = impl_signature(args, ret_type, generics, poly, by_value);
         quote! {
             #[allow(non_camel_case_types,non_snake_case)]
             impl<#sig, #(#arg_list,)*> ::std::clone::Clone for #name <#(#arg_list,)* BODYFN>

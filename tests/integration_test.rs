@@ -58,3 +58,14 @@ fn simple_fn() {
     let number = two.y(|| 40);
     assert_eq!(number.call(), 42);
 }
+
+#[part_app(value)]
+fn value_add(x: u32, y: u32) -> i64 {
+    (x + y) as i64
+}
+
+#[test]
+fn by_value() {
+    let adder = value_add().x(3);
+    assert_eq!(adder.y(3).call(), 6);
+}

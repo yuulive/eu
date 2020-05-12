@@ -118,8 +118,8 @@ The macro creates a function which produces a builder pattern like struct. The
 struct is parameterized by which variables are defined. Defining a variable is
 only implemented for the struct if that variable is not already defined. The
 final call is defined only when each variable is itself defined. A variable is
-marked as defined if it's place paramater is of type `bool`. It is marked as
-undefined when it's place is parameterized by type `()`. 
+marked as defined if it's place paramater is of type `Added`. It is marked as
+undefined when it's place is parameterized by type `Empty`. 
 
 ## Limitations
 In an effort to make this as optimizable as possible, I avoid any heap
@@ -128,8 +128,7 @@ instance of a PartialApplication struct can only hold one type of closure. This
 also prevents copying. To avoid this, adding the attribute `poly` enables heap
 allocation and thus all closures with the same trait are equally acceptable. The
 attribute `Clone` enables partially constructed functions to be cloned before
-they are called.
+they are called. `value` enables passing in values instead of structs. 
 
 ## Next
-Implement argument by value instead of closure, for a more intuitive cleanup. I
-could also cleanup my code significantly.
+I could also cleanup my code significantly.
