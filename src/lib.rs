@@ -6,7 +6,6 @@ use quote::quote;
 use syn;
 use syn::spanned::Spanned;
 
-#[cfg(test)]
 mod example;
 #[cfg(test)]
 mod tests {
@@ -65,19 +64,24 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 struct #empty_unit;
             };
 
-            println!("generator: {}", generator_func);
+            let final_call =
+                final_call(&predicate, &argument_vector, &func.sig.output, &added_unit);
+
+            let argument_calls = argument_calls(
+                &predicate,
+                &argument_vector,
+                &added_unit,
+                &empty_unit,
+                &func.sig.output,
+            );
 
             // assemble output
             let mut out = proc_macro2::TokenStream::new();
             out.extend(unit_structs);
             out.extend(func_struct);
             out.extend(generator_func);
-            out.extend(final_call(
-                &predicate,
-                &argument_vector,
-                &func.sig.output,
-                &added_unit,
-            ));
+            out.extend(argument_calls);
+            out.extend(final_call);
             TokenStream::from(out)
         }
         _ => {
@@ -103,11 +107,61 @@ fn impl_signature<'a>(
     let arg_types = arg_types(&args);
     let augmented_names = augmented_argument_names(&arg_names);
 
-    let out = quote! {
+    quote! {
         #(#augmented_names: FnOnce() -> #arg_types,)*
-        BODYFN: FnOnce(#(#arg_types)*) #ret_type
-    };
-    out.into()
+        BODYFN: FnOnce(#(#arg_types,)*) #ret_type
+    }
+}
+
+fn argument_calls<'a>(
+    struct_name: &syn::Ident,
+    args: &Vec<&syn::PatType>,
+    unit_added: &syn::Ident,
+    unit_empty: &syn::Ident,
+    ret_type: &'a syn::ReturnType,
+) -> proc_macro2::TokenStream {
+    let impl_sig = impl_signature(args, ret_type);
+    let arg_name_vec = arg_names(args);
+    let aug_arg_names = augmented_argument_names(&arg_name_vec);
+    arg_names(args)
+        .into_iter()
+        .zip(&aug_arg_names)
+        .map(|(n, n_fn)| {
+            // All variable names except the name of this function
+            let free_vars: Vec<_> = arg_name_vec.iter().filter(|&x| x != &n).collect();
+            let associated_vals_out: Vec<_> = arg_name_vec
+                .iter()
+                .map(|x| {
+                    if &n == x {
+                        unit_added.clone()
+                    } else {
+                        x.clone()
+                    }
+                })
+                .collect();
+            let associated_vals_in: Vec<_> = associated_vals_out
+                .iter()
+                .map(|x| if x == unit_added { unit_empty } else { x })
+                .collect();
+            quote! {
+                #[allow(non_camel_case_types,non_snake_case)]
+                impl< #impl_sig, #(#free_vars,)* >
+                    #struct_name< #(#associated_vals_in, #aug_arg_names,)* BODYFN>
+                {
+                    fn #n (mut self, #n: #n_fn) ->
+                        #struct_name< #(#associated_vals_out, #aug_arg_names,)* BODYFN>{
+                        self.#n = Some(#n);
+                        unsafe {
+                            ::std::mem::transmute_copy::<
+                                #struct_name<#(#associated_vals_in, #aug_arg_names,)* BODYFN>,
+                            #struct_name<#(#associated_vals_out, #aug_arg_names,)* BODYFN>,
+                            >(&self)
+                        }
+                    }
+                }
+            }
+        })
+        .collect()
 }
 
 fn final_call<'a>(
@@ -120,10 +174,13 @@ fn final_call<'a>(
     let arg_names = arg_names(args);
     let aug_args = augmented_argument_names(&arg_names);
     quote! {
+        #[allow(non_camel_case_types,non_snake_case)]
         impl <#impl_sig>
-            #struct_name<#(#unit_added, #aug_args,)*, BODYFN>
+            #struct_name<#(#unit_added, #aug_args,)* BODYFN>
         {
-
+            fn call(self) #ret_type {
+                (self.body)(#(self.#arg_names.unwrap()(),)*)
+            }
         }
     }
 }
