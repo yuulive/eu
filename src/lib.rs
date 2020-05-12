@@ -73,6 +73,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &func.sig.output,
                 &added_unit,
                 &generics,
+                polymorphic,
             );
 
             let argument_calls = argument_calls(
@@ -82,6 +83,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &empty_unit,
                 func_out,
                 &generics,
+                polymorphic,
             );
 
             // assemble output
@@ -112,15 +114,20 @@ fn impl_signature<'a>(
     args: &Vec<&syn::PatType>,
     ret_type: &'a syn::ReturnType,
     generics: &Vec<&syn::GenericParam>,
+    poly: bool,
 ) -> proc_macro2::TokenStream {
     let arg_names = arg_names(&args);
     let arg_types = arg_types(&args);
-    let augmented_names = augmented_argument_names(&arg_names);
+    let augmented_names = if !poly {
+        augmented_argument_names(&arg_names)
+    } else {
+        Vec::new()
+    };
 
     quote! {
         #(#generics,)*
-        #(#augmented_names: FnOnce() -> #arg_types,)*
-        BODYFN: FnOnce(#(#arg_types,)*) #ret_type
+        #(#augmented_names: Fn() -> #arg_types,)*
+        BODYFN: Fn(#(#arg_types,)*) #ret_type
     }
 }
 
@@ -133,8 +140,9 @@ fn argument_calls<'a>(
     unit_empty: &syn::Ident,
     ret_type: &'a syn::ReturnType,
     generics: &Vec<&syn::GenericParam>,
+    poly: bool,
 ) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type, generics);
+    let impl_sig = impl_signature(args, ret_type, generics, poly);
     let arg_name_vec = arg_names(args);
     let aug_arg_names = augmented_argument_names(&arg_name_vec);
     arg_names(args)
@@ -157,6 +165,11 @@ fn argument_calls<'a>(
                 .iter()
                 .map(|x| if x == unit_added { unit_empty } else { x })
                 .collect();
+			let (transmute, self_type) = if poly {
+				(quote!(transmute), quote!(self))
+			} else {
+				(quote!(transmute_copy), quote!(&self))
+			};
             quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
                 impl< #impl_sig, #(#free_vars,)* > // The impl signature
@@ -166,10 +179,10 @@ fn argument_calls<'a>(
                         #struct_name<#(#generics,)* #(#associated_vals_out, #aug_arg_names,)* BODYFN>{
                         self.#n = Some(#n);
                         unsafe {
-                            ::std::mem::transmute_copy::<
+                            ::std::mem::#transmute::<
                                 #struct_name<#(#generics,)* #(#associated_vals_in, #aug_arg_names,)* BODYFN>,
                             #struct_name<#(#generics,)* #(#associated_vals_out, #aug_arg_names,)* BODYFN>,
-                            >(&self)
+                            >(#self_type)
                         }
                     }
                 }
@@ -185,8 +198,9 @@ fn final_call<'a>(
     ret_type: &'a syn::ReturnType,
     unit_added: &'a syn::Ident,
     generics: &Vec<&syn::GenericParam>,
+    poly: bool,
 ) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type, generics);
+    let impl_sig = impl_signature(args, ret_type, generics, poly);
     let arg_names = arg_names(args);
     let aug_args = augmented_argument_names(&arg_names);
     quote! {
@@ -220,9 +234,9 @@ fn generator_func<'a>(
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
         fn #name<#(#generics,)* #(#arg_names,)* >() -> #struct_name<#(#generics,)* #(#empty_unit,#arg_names,)*
-        impl FnOnce(#(#arg_types,)*) #ret_type>
+        impl Fn(#(#arg_types,)*) #ret_type>
         where
-            #(#arg_names: FnOnce() -> #arg_types,)*
+            #(#arg_names: Fn() -> #arg_types,)*
         {
             #struct_name {
                 #(#arg_names: None,)*
@@ -320,8 +334,8 @@ fn main_struct<'a>(
         #[allow(non_camel_case_types,non_snake_case)]
         struct #name <#(#generics,)* #(#arg_names, #arg_augmented,)*BODYFN>
         where
-            #(#arg_augmented: FnOnce() -> #arg_types,)*
-            BODYFN: FnOnce(#(#arg_types,)*) #ret_type,
+            #(#arg_augmented: Fn() -> #arg_types,)*
+            BODYFN: Fn(#(#arg_types,)*) #ret_type,
         {
             // These hold the (phantom) types which represent if a field has
             // been filled

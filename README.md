@@ -128,4 +128,5 @@ instance of a PartialApplication struct can only hold one type of closure.
 
 ## Next
 Implemented closure polymorphism using boxes (and arcs). The modifications
-necessary are already modeled in the test example.
+necessary are already modeled in the test example. Implement `Clone` as an
+attribute. Finally, implement argument by value instead of closure.
