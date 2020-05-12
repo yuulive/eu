@@ -124,9 +124,12 @@ undefined when it's place is parameterized by type `()`.
 ## Limitations
 In an effort to make this as optimizable as possible, I avoid any heap
 allocations. This prevents me from abstracting over types of closures. Any
-instance of a PartialApplication struct can only hold one type of closure.
+instance of a PartialApplication struct can only hold one type of closure. This
+also prevents copying. To avoid this, adding the attribute `poly` enables heap
+allocation and thus all closures with the same trait are equally acceptable. The
+attribute `Clone` enables partially constructed functions to be cloned before
+they are called.
 
 ## Next
-Implemented closure polymorphism using boxes (and arcs). The modifications
-necessary are already modeled in the test example. Implement `Clone` as an
-attribute. Finally, implement argument by value instead of closure.
+Implement argument by value instead of closure, for a more intuitive cleanup. I
+could also cleanup my code significantly.

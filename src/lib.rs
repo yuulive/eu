@@ -10,14 +10,18 @@ use syn::spanned::Spanned;
 #[proc_macro_attribute]
 pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
     let func_item: syn::Item = syn::parse(item).expect("failed to parse input");
-    let attributes: Vec<String> = attr.to_string().split(",").map(|s| s.to_string()).collect();
+    let attributes: Vec<String> = attr
+        .to_string()
+        .split(",")
+        .map(|s| s.trim().to_string())
+        .collect();
     let polymorphic = attributes.contains(&"poly".to_string());
     let impl_clone = attributes.contains(&"Clone".to_string());
     if !polymorphic && impl_clone {
         func_item
             .span()
             .unstable()
-            .error(r#"Cannot implement "Clone" without "poly""#)
+            .error(r##"Cannot implement "Clone" without "poly". Try "#[part_app(poly,Clone)]""##)
             .emit()
     }
     if !attr.is_empty() && !polymorphic {
@@ -55,6 +59,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 func_out,
                 &generics,
                 polymorphic,
+                impl_clone,
             );
 
             let generator_func = generator_func(
@@ -100,7 +105,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             out.extend(generator_func);
             out.extend(argument_calls);
             out.extend(final_call);
-            // println!("{}", out);
+
             TokenStream::from(out)
         }
         _ => {
@@ -378,6 +383,7 @@ fn main_struct<'a>(
     ret_type: &'a syn::ReturnType,
     generics: &Vec<&syn::GenericParam>,
     poly: bool,
+    impl_clone: bool,
 ) -> proc_macro2::TokenStream {
     let arg_types = arg_types(&args);
 
@@ -413,11 +419,30 @@ fn main_struct<'a>(
         quote! {#(#arg_names: Option<::std::sync::Arc<dyn Fn() -> #arg_types>>,)*}
     };
 
+    let clone = if impl_clone {
+        let sig = impl_signature(args, ret_type, generics, poly);
+        quote! {
+            #[allow(non_camel_case_types,non_snake_case)]
+            impl<#sig, #(#arg_list,)*> ::std::clone::Clone for #name <#(#arg_list,)* BODYFN>
+            where #where_clause
+            {
+                fn clone(&self) -> Self {
+                    Self {
+                        #(#names_with_m: ::std::marker::PhantomData,)*
+                        #(#arg_names: self.#arg_names.clone(),)*
+                        body: self.body.clone(),
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
         struct #name <#(#generics,)* #(#arg_list,)*BODYFN>
-        where
-            #where_clause
+        where #where_clause
         {
             // These hold the (phantom) types which represent if a field has
             // been filled
@@ -427,6 +452,8 @@ fn main_struct<'a>(
             // This holds the executable function
             body: #bodyfn,
         }
+
+        #clone
     }
     // TODO: Add copy here
 }
