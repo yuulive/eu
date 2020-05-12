@@ -49,7 +49,13 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .emit();
             }
 
-            let func_struct = main_struct(&predicate, &argument_vector, func_out, &generics);
+            let func_struct = main_struct(
+                &predicate,
+                &argument_vector,
+                func_out,
+                &generics,
+                polymorphic,
+            );
 
             let generator_func = generator_func(
                 &predicate,
@@ -59,6 +65,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &empty_unit,
                 &func.block,
                 &generics,
+                polymorphic,
             );
             let unit_structs = quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
@@ -145,10 +152,12 @@ fn argument_calls<'a>(
     let impl_sig = impl_signature(args, ret_type, generics, poly);
     let arg_name_vec = arg_names(args);
     let aug_arg_names = augmented_argument_names(&arg_name_vec);
+    let arg_types = arg_types(&args);
     arg_names(args)
         .into_iter()
         .zip(&aug_arg_names)
-        .map(|(n, n_fn)| {
+        .zip(arg_types)
+        .map(|((n, n_fn), n_type)| {
             // All variable names except the name of this function
             let free_vars: Vec<_> = arg_name_vec.iter().filter(|&x| x != &n).collect();
             let associated_vals_out: Vec<_> = arg_name_vec
@@ -161,27 +170,47 @@ fn argument_calls<'a>(
                     }
                 })
                 .collect();
+            let val_list_out = if poly {
+                quote! {#(#associated_vals_out,)*}
+            } else {
+                quote! {#(#associated_vals_out, #aug_arg_names,)*}
+            };
             let associated_vals_in: Vec<_> = associated_vals_out
                 .iter()
                 .map(|x| if x == unit_added { unit_empty } else { x })
                 .collect();
-			let (transmute, self_type) = if poly {
-				(quote!(transmute), quote!(self))
-			} else {
-				(quote!(transmute_copy), quote!(&self))
-			};
+            let val_list_in = if poly {
+                quote! {#(#associated_vals_in,)*}
+            } else {
+                quote! {#(#associated_vals_in, #aug_arg_names,)*}
+            };
+            let (transmute, self_type) = if poly {
+                (quote!(transmute), quote!(self))
+            } else {
+                (quote!(transmute_copy), quote!(&self))
+            };
+            let some = if poly {
+                quote! {Some(::std::sync::Arc::from(#n))}
+            } else {
+                quote! {Some(#n)}
+            };
+            let in_type = if poly {
+                quote! { Box<dyn Fn() -> #n_type> }
+            } else {
+                quote! { #n_fn }
+            };
             quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
                 impl< #impl_sig, #(#free_vars,)* > // The impl signature
-                    #struct_name<#(#generics,)* #(#associated_vals_in, #aug_arg_names,)* BODYFN> // The struct signature
+                    #struct_name<#(#generics,)* #val_list_in BODYFN> // The struct signature
                 {
-                    fn #n (mut self, #n: #n_fn) ->
-                        #struct_name<#(#generics,)* #(#associated_vals_out, #aug_arg_names,)* BODYFN>{
-                        self.#n = Some(#n);
+                    fn #n (mut self, #n: #in_type) ->
+                        #struct_name<#(#generics,)* #val_list_out BODYFN>{
+                        self.#n = #some;
                         unsafe {
                             ::std::mem::#transmute::<
-                                #struct_name<#(#generics,)* #(#associated_vals_in, #aug_arg_names,)* BODYFN>,
-                            #struct_name<#(#generics,)* #(#associated_vals_out, #aug_arg_names,)* BODYFN>,
+                                #struct_name<#(#generics,)* #val_list_in BODYFN>,
+                            #struct_name<#(#generics,)* #val_list_out BODYFN>,
                             >(#self_type)
                         }
                     }
@@ -203,11 +232,16 @@ fn final_call<'a>(
     let impl_sig = impl_signature(args, ret_type, generics, poly);
     let arg_names = arg_names(args);
     let aug_args = augmented_argument_names(&arg_names);
+    let arg_list: proc_macro2::TokenStream = if poly {
+        aug_args.iter().map(|_| quote! {#unit_added,}).collect()
+    } else {
+        aug_args.iter().map(|a| quote! {#unit_added, #a,}).collect()
+    };
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
         impl <#impl_sig> // impl signature
             // struct signature
-            #struct_name<#(#generics,)* #(#unit_added, #aug_args,)* BODYFN>
+            #struct_name<#(#generics,)* #arg_list BODYFN>
         {
             fn call(self) #ret_type { // final call
                 (self.body)(#(self.#arg_names.unwrap()(),)*)
@@ -226,22 +260,44 @@ fn generator_func<'a>(
     empty_unit: &'a syn::Ident,
     body: &'a Box<syn::Block>,
     generics: &Vec<&syn::GenericParam>,
+    poly: bool,
 ) -> proc_macro2::TokenStream {
     let arg_names = arg_names(&args);
     let arg_types = arg_types(&args);
     let marker_names = marker_names(&arg_names);
-
+    let gen_types = if poly {
+        quote! {#(#generics,)*}
+    } else {
+        quote! {#(#generics,)* #(#arg_names,)*}
+    };
+    let struct_types = if poly {
+        arg_names.iter().map(|_| quote! {#empty_unit,}).collect()
+    } else {
+        quote! {#(#empty_unit,#arg_names,)*}
+    };
+    let body_fn = if poly {
+        quote! {::std::sync::Arc::new(|#(#arg_names,)*| #body),}
+    } else {
+        quote! {|#(#arg_names,)*| #body,}
+    };
+    let where_clause = if poly {
+        quote!()
+    } else {
+        quote! {
+            where
+                #(#arg_names: Fn() -> #arg_types,)*
+        }
+    };
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
-        fn #name<#(#generics,)* #(#arg_names,)* >() -> #struct_name<#(#generics,)* #(#empty_unit,#arg_names,)*
+        fn #name<#gen_types>() -> #struct_name<#(#generics,)* #struct_types
         impl Fn(#(#arg_types,)*) #ret_type>
-        where
-            #(#arg_names: Fn() -> #arg_types,)*
+            #where_clause
         {
             #struct_name {
                 #(#arg_names: None,)*
                 #(#marker_names: ::std::marker::PhantomData,)*
-                body: |#(#arg_names,)*| #body
+                body: #body_fn
             }
         }
 
@@ -321,29 +377,56 @@ fn main_struct<'a>(
     args: &Vec<&syn::PatType>,
     ret_type: &'a syn::ReturnType,
     generics: &Vec<&syn::GenericParam>,
+    poly: bool,
 ) -> proc_macro2::TokenStream {
     let arg_types = arg_types(&args);
 
     let arg_names = arg_names(&args);
-
     let arg_augmented = augmented_argument_names(&arg_names);
 
-    let names_with_m = marker_names(&arg_names);
-
-    quote!(
-        #[allow(non_camel_case_types,non_snake_case)]
-        struct #name <#(#generics,)* #(#arg_names, #arg_augmented,)*BODYFN>
-        where
+    let arg_list: Vec<_> = if !poly {
+        arg_names
+            .iter()
+            .zip(arg_augmented.iter())
+            .flat_map(|(n, a)| vec![n, a])
+            .collect()
+    } else {
+        arg_names.iter().collect()
+    };
+    let bodyfn = if poly {
+        quote! {::std::sync::Arc<BODYFN>}
+    } else {
+        quote! { BODYFN }
+    };
+    let where_clause = if poly {
+        quote!(BODYFN: Fn(#(#arg_types,)*) #ret_type,)
+    } else {
+        quote! {
             #(#arg_augmented: Fn() -> #arg_types,)*
             BODYFN: Fn(#(#arg_types,)*) #ret_type,
+        }
+    };
+    let names_with_m = marker_names(&arg_names);
+    let option_list = if !poly {
+        quote! {#(#arg_names: Option<#arg_augmented>,)*}
+    } else {
+        quote! {#(#arg_names: Option<::std::sync::Arc<dyn Fn() -> #arg_types>>,)*}
+    };
+
+    quote! {
+        #[allow(non_camel_case_types,non_snake_case)]
+        struct #name <#(#generics,)* #(#arg_list,)*BODYFN>
+        where
+            #where_clause
         {
             // These hold the (phantom) types which represent if a field has
             // been filled
             #(#names_with_m: ::std::marker::PhantomData<#arg_names>,)*
             // These hold the closures representing each argument
-            #(#arg_names: Option<#arg_augmented>,)*
+            #option_list
             // This holds the executable function
-            body: BODYFN,
+            body: #bodyfn,
         }
-    )
+    }
+    // TODO: Add copy here
 }

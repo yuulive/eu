@@ -17,6 +17,23 @@ fn one_and_two() {
     assert_eq!(final2.call(), 4);
 }
 
+#[part_app(poly)]
+fn adder(a: u32, b: u32, c: u32) -> u32 {
+    a + b + c
+}
+
+#[test]
+fn poly() {
+    let a = adder().c(Box::new(|| 5));
+    let b = a.a(Box::new(|| 1 + 2));
+    if true {
+        let c = b.b(Box::new(|| 6));
+        assert_eq!(c.call(), 14);
+    } else {
+        assert_eq!(b.b(Box::new(|| 0)).call(), 8);
+    }
+}
+
 #[part_app]
 fn concat_string<'a>(s1: &'a str, s2: &'a str) -> String {
     s1.to_string() + &s2
@@ -42,6 +59,7 @@ fn simple_fn() {
     assert_eq!(number.call(), 42);
 }
 
+// Example code
 #[allow(non_camel_case_types, non_snake_case)]
 struct foo___Added;
 #[allow(non_camel_case_types, non_snake_case)]
@@ -119,3 +137,4 @@ impl<BODYFN: Fn(u32, u64) -> i16> __PartialApplication__foo_<foo___Added, foo___
         (self.body)(self.bar.unwrap()(), self.baz.unwrap()())
     }
 }
+// Bad code
