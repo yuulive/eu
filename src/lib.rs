@@ -20,13 +20,6 @@ mod tests {
     }
 }
 
-#[proc_macro_attribute]
-pub fn show_streams(attr: TokenStream, item: TokenStream) -> TokenStream {
-    println!("attr: \"{}\"", attr.to_string());
-    println!("item: \"{}\"", item.to_string());
-    item
-}
-
 /// Turns function into partially applicable functions.
 #[proc_macro_attribute]
 pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -50,8 +43,18 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             let empty_unit = concat_ident(name, "Empty");
             let argument_vector = argument_vector(&func.sig.inputs);
             let func_out = &func.sig.output;
+            let generics: Vec<_> = func.sig.generics.params.iter().map(|f| f).collect();
 
-            let func_struct = main_struct(&predicate, &argument_vector, func_out);
+            // disallow where clauses
+            if let Some(w) = &func.sig.generics.where_clause {
+                w.span()
+                    .unstable()
+                    .error("part_app does not allow where clauses")
+                    .emit();
+            }
+            println!("generics: {:#?}", quote!(#(#generics,)*).to_string());
+
+            let func_struct = main_struct(&predicate, &argument_vector, func_out, &generics);
 
             let generator_func = generator_func(
                 &predicate,
@@ -86,6 +89,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             out.extend(generator_func);
             out.extend(argument_calls);
             out.extend(final_call);
+            // func_item.span().unstable().error(format!("{}", out)).emit();
             TokenStream::from(out)
         }
         _ => {
@@ -97,7 +101,6 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 )
                 .emit();
             let out: proc_macro::TokenStream = quote! { #func_item }.into();
-            println!("{}", out);
             out
         }
     }
@@ -280,6 +283,7 @@ fn main_struct<'a>(
     name: &'a syn::Ident,
     args: &Vec<&syn::PatType>,
     ret_type: &'a syn::ReturnType,
+    generics: &Vec<&syn::GenericParam>,
 ) -> proc_macro2::TokenStream {
     let arg_types = arg_types(&args);
 
