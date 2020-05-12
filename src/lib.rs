@@ -6,20 +6,6 @@ use quote::quote;
 use syn;
 use syn::spanned::Spanned;
 
-#[cfg(test)]
-mod example;
-#[cfg(test)]
-mod tests {
-    use crate::example::add1;
-    #[test]
-    fn it_works() {
-        let a = add1();
-        let with_three = a.x(|| 3);
-        let and_two = with_three.y(|| 2);
-        assert_eq!(and_two.call(), 5);
-    }
-}
-
 /// Turns function into partially applicable functions.
 #[proc_macro_attribute]
 pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -95,7 +81,6 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             out.extend(generator_func);
             out.extend(argument_calls);
             out.extend(final_call);
-
             TokenStream::from(out)
         }
         _ => {
@@ -106,8 +91,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                     "Only functions can be partially applied, for structs use the builder pattern",
                 )
                 .emit();
-            let out: proc_macro::TokenStream = quote! { #func_item }.into();
-            out
+            proc_macro::TokenStream::from(quote! { #func_item })
         }
     }
 }
@@ -129,6 +113,8 @@ fn impl_signature<'a>(
     }
 }
 
+/// Generates the methods used to add argument values to a partially applied function. One method is generate for each
+/// argument and each method is contained in it's own impl block.
 fn argument_calls<'a>(
     struct_name: &syn::Ident,
     args: &Vec<&syn::PatType>,
@@ -162,8 +148,8 @@ fn argument_calls<'a>(
                 .collect();
             quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
-                impl< #impl_sig, #(#free_vars,)* >
-                    #struct_name<#(#generics,)* #(#associated_vals_in, #aug_arg_names,)* BODYFN>
+                impl< #impl_sig, #(#free_vars,)* > // The impl signature
+                    #struct_name<#(#generics,)* #(#associated_vals_in, #aug_arg_names,)* BODYFN> // The struct signature
                 {
                     fn #n (mut self, #n: #n_fn) ->
                         #struct_name<#(#generics,)* #(#associated_vals_out, #aug_arg_names,)* BODYFN>{
@@ -181,6 +167,7 @@ fn argument_calls<'a>(
         .collect()
 }
 
+/// Generates the call function, which executes a fully filled out partially applicable struct.
 fn final_call<'a>(
     struct_name: &syn::Ident,
     args: &Vec<&syn::PatType>,
@@ -193,17 +180,19 @@ fn final_call<'a>(
     let aug_args = augmented_argument_names(&arg_names);
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
-        impl <#impl_sig>
+        impl <#impl_sig> // impl signature
+            // struct signature
             #struct_name<#(#generics,)* #(#unit_added, #aug_args,)* BODYFN>
         {
-            fn call(self) #ret_type {
+            fn call(self) #ret_type { // final call
                 (self.body)(#(self.#arg_names.unwrap()(),)*)
             }
         }
     }
 }
 
-/// The function called by the user to create an instance of a partially applicable function
+/// The function called by the user to create an instance of a partially applicable function. This function always has
+/// the name of the original function the macro is called on.
 fn generator_func<'a>(
     struct_name: &'a syn::Ident,
     name: &'a syn::Ident,
@@ -234,7 +223,7 @@ fn generator_func<'a>(
     }
 }
 
-/// A vector of all argument names
+/// A vector of all argument names. Simple parsing.
 fn arg_names<'a>(args: &Vec<&syn::PatType>) -> Vec<syn::Ident> {
     args.iter()
         .map(|f| {
@@ -244,7 +233,7 @@ fn arg_names<'a>(args: &Vec<&syn::PatType>) -> Vec<syn::Ident> {
         .collect()
 }
 
-/// returns the vector of names used to hold PhantomData
+/// The vector of names used to hold PhantomData.
 fn marker_names(names: &Vec<syn::Ident>) -> Vec<syn::Ident> {
     names.iter().map(|f| concat_ident(f, "m")).collect()
 }
@@ -274,7 +263,18 @@ fn argument_vector<'a>(
     args.iter()
         .map(|fn_arg| match fn_arg {
             syn::FnArg::Receiver(_) => panic!("should filter out reciever arguments"),
-            syn::FnArg::Typed(t) => t,
+            syn::FnArg::Typed(t) => {
+                if let syn::Type::Reference(r) = t.ty.as_ref() {
+                    if r.lifetime.is_none() {
+                        t.span()
+                            .unstable()
+                            .error("part_app does not support lifetime elision")
+                            .emit();
+                    }
+                }
+
+                t
+            }
         })
         .collect()
 }
@@ -284,6 +284,7 @@ fn arg_types<'a>(args: &Vec<&'a syn::PatType>) -> Vec<&'a syn::Type> {
     args.iter().map(|f| f.ty.as_ref()).collect()
 }
 
+/// Names to hold function types
 fn augmented_argument_names<'a>(arg_names: &Vec<syn::Ident>) -> Vec<syn::Ident> {
     arg_names.iter().map(|f| concat_ident(f, "FN")).collect()
 }
@@ -311,8 +312,12 @@ fn main_struct<'a>(
             #(#arg_augmented: FnOnce() -> #arg_types,)*
             BODYFN: FnOnce(#(#arg_types,)*) #ret_type,
         {
+            // These hold the (phantom) types which represent if a field has
+            // been filled
             #(#names_with_m: ::std::marker::PhantomData<#arg_names>,)*
+            // These hold the closures representing each argument
             #(#arg_names: Option<#arg_augmented>,)*
+            // This holds the executable function
             body: BODYFN,
         }
     )

@@ -24,3 +24,16 @@ fn hello_world() {
     let hello = world.s1(|| "Hello, ");
     assert_eq!(hello.call(), "Hello, World!");
 }
+
+#[part_app]
+fn add(x: u32, y: u32) -> i64 {
+    (x + y) as i64
+}
+
+#[test]
+fn simple_fn() {
+    let a = add();
+    let two = a.x(|| 2);
+    let number = two.y(|| 40);
+    assert_eq!(number.call(), 42);
+}
