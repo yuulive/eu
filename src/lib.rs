@@ -52,7 +52,6 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .error("part_app does not allow where clauses")
                     .emit();
             }
-            println!("generics: {:#?}", quote!(#(#generics,)*).to_string());
 
             let func_struct = main_struct(&predicate, &argument_vector, func_out, &generics);
 
@@ -63,6 +62,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 func_out,
                 &empty_unit,
                 &func.block,
+                &generics,
             );
             let unit_structs = quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
@@ -71,8 +71,13 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 struct #empty_unit;
             };
 
-            let final_call =
-                final_call(&predicate, &argument_vector, &func.sig.output, &added_unit);
+            let final_call = final_call(
+                &predicate,
+                &argument_vector,
+                &func.sig.output,
+                &added_unit,
+                &generics,
+            );
 
             let argument_calls = argument_calls(
                 &predicate,
@@ -80,6 +85,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                 &added_unit,
                 &empty_unit,
                 func_out,
+                &generics,
             );
 
             // assemble output
@@ -89,7 +95,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             out.extend(generator_func);
             out.extend(argument_calls);
             out.extend(final_call);
-            // func_item.span().unstable().error(format!("{}", out)).emit();
+
             TokenStream::from(out)
         }
         _ => {
@@ -110,12 +116,14 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
 fn impl_signature<'a>(
     args: &Vec<&syn::PatType>,
     ret_type: &'a syn::ReturnType,
+    generics: &Vec<&syn::GenericParam>,
 ) -> proc_macro2::TokenStream {
     let arg_names = arg_names(&args);
     let arg_types = arg_types(&args);
     let augmented_names = augmented_argument_names(&arg_names);
 
     quote! {
+        #(#generics,)*
         #(#augmented_names: FnOnce() -> #arg_types,)*
         BODYFN: FnOnce(#(#arg_types,)*) #ret_type
     }
@@ -127,8 +135,9 @@ fn argument_calls<'a>(
     unit_added: &syn::Ident,
     unit_empty: &syn::Ident,
     ret_type: &'a syn::ReturnType,
+    generics: &Vec<&syn::GenericParam>,
 ) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type);
+    let impl_sig = impl_signature(args, ret_type, generics);
     let arg_name_vec = arg_names(args);
     let aug_arg_names = augmented_argument_names(&arg_name_vec);
     arg_names(args)
@@ -154,15 +163,15 @@ fn argument_calls<'a>(
             quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
                 impl< #impl_sig, #(#free_vars,)* >
-                    #struct_name< #(#associated_vals_in, #aug_arg_names,)* BODYFN>
+                    #struct_name<#(#generics,)* #(#associated_vals_in, #aug_arg_names,)* BODYFN>
                 {
                     fn #n (mut self, #n: #n_fn) ->
-                        #struct_name< #(#associated_vals_out, #aug_arg_names,)* BODYFN>{
+                        #struct_name<#(#generics,)* #(#associated_vals_out, #aug_arg_names,)* BODYFN>{
                         self.#n = Some(#n);
                         unsafe {
                             ::std::mem::transmute_copy::<
-                                #struct_name<#(#associated_vals_in, #aug_arg_names,)* BODYFN>,
-                            #struct_name<#(#associated_vals_out, #aug_arg_names,)* BODYFN>,
+                                #struct_name<#(#generics,)* #(#associated_vals_in, #aug_arg_names,)* BODYFN>,
+                            #struct_name<#(#generics,)* #(#associated_vals_out, #aug_arg_names,)* BODYFN>,
                             >(&self)
                         }
                     }
@@ -177,14 +186,15 @@ fn final_call<'a>(
     args: &Vec<&syn::PatType>,
     ret_type: &'a syn::ReturnType,
     unit_added: &'a syn::Ident,
+    generics: &Vec<&syn::GenericParam>,
 ) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type);
+    let impl_sig = impl_signature(args, ret_type, generics);
     let arg_names = arg_names(args);
     let aug_args = augmented_argument_names(&arg_names);
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
         impl <#impl_sig>
-            #struct_name<#(#unit_added, #aug_args,)* BODYFN>
+            #struct_name<#(#generics,)* #(#unit_added, #aug_args,)* BODYFN>
         {
             fn call(self) #ret_type {
                 (self.body)(#(self.#arg_names.unwrap()(),)*)
@@ -201,6 +211,7 @@ fn generator_func<'a>(
     ret_type: &'a syn::ReturnType,
     empty_unit: &'a syn::Ident,
     body: &'a Box<syn::Block>,
+    generics: &Vec<&syn::GenericParam>,
 ) -> proc_macro2::TokenStream {
     let arg_names = arg_names(&args);
     let arg_types = arg_types(&args);
@@ -208,7 +219,7 @@ fn generator_func<'a>(
 
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
-        fn #name< #(#arg_names,)* >() -> #struct_name<#(#empty_unit,#arg_names,)*
+        fn #name<#(#generics,)* #(#arg_names,)* >() -> #struct_name<#(#generics,)* #(#empty_unit,#arg_names,)*
         impl FnOnce(#(#arg_types,)*) #ret_type>
         where
             #(#arg_names: FnOnce() -> #arg_types,)*
@@ -295,7 +306,7 @@ fn main_struct<'a>(
 
     quote!(
         #[allow(non_camel_case_types,non_snake_case)]
-        struct #name <#(#arg_names, #arg_augmented,)*BODYFN>
+        struct #name <#(#generics,)* #(#arg_names, #arg_augmented,)*BODYFN>
         where
             #(#arg_augmented: FnOnce() -> #arg_types,)*
             BODYFN: FnOnce(#(#arg_types,)*) #ret_type,
