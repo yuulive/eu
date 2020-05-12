@@ -10,11 +10,21 @@ use syn::spanned::Spanned;
 #[proc_macro_attribute]
 pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
     let func_item: syn::Item = syn::parse(item).expect("failed to parse input");
-    if !attr.is_empty() {
+    let attributes: Vec<String> = attr.to_string().split(",").map(|s| s.to_string()).collect();
+    let polymorphic = attributes.contains(&"poly".to_string());
+    let impl_clone = attributes.contains(&"Clone".to_string());
+    if !polymorphic && impl_clone {
         func_item
             .span()
             .unstable()
-            .error("No attributes accepted")
+            .error(r#"Cannot implement "Clone" without "poly""#)
+            .emit()
+    }
+    if !attr.is_empty() && !polymorphic {
+        func_item
+            .span()
+            .unstable()
+            .error(r#""poly" is the only accepted attribute"#)
             .emit()
     }
 
@@ -81,7 +91,7 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
             out.extend(generator_func);
             out.extend(argument_calls);
             out.extend(final_call);
-
+            // println!("{}", out);
             TokenStream::from(out)
         }
         _ => {
