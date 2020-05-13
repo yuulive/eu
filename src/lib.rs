@@ -15,16 +15,8 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     match func_item {
         syn::Item::Fn(ref func) => {
-            let name = get_name(func);
-            let struct_name =
-                syn::Ident::new(&format!("__PartialApplication__{}_", name), name.span());
-            // TODO: maybe these should be public if the original function is
-            // itself public
-            let added_unit = concat_ident(name, "Added");
-            let empty_unit = concat_ident(name, "Empty");
-            let argument_vector = argument_vector(&func.sig.inputs);
-            let func_out = &func.sig.output;
-            let generics: Vec<_> = func.sig.generics.params.iter().map(|f| f).collect();
+            let fn_info = FunctionInformation::from(func);
+            fn_info.check();
 
             // disallow where clauses
             if let Some(w) = &func.sig.generics.where_clause {
@@ -34,49 +26,22 @@ pub fn part_app(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .emit();
             }
 
-            let func_struct = main_struct(
-                &struct_name,
-                &argument_vector,
-                func_out,
-                &generics,
-                &attr_options,
-            );
+            let func_struct = main_struct(&fn_info, &attr_options);
+            let generator_func = generator_func(&fn_info, &attr_options);
+            let final_call = final_call(&fn_info, &attr_options);
+            let argument_calls = argument_calls(&fn_info, &attr_options);
 
-            let generator_func = generator_func(
-                &struct_name,
-                name,
-                &argument_vector,
-                func_out,
-                &empty_unit,
-                &func.block,
-                &generics,
-                &attr_options,
-            );
-            let unit_structs = quote! {
-                #[allow(non_camel_case_types,non_snake_case)]
-                struct #added_unit;
-                #[allow(non_camel_case_types,non_snake_case)]
-                struct #empty_unit;
+            let unit_structs = {
+                let added_unit = fn_info.unit.added;
+                let empty_unit = fn_info.unit.empty;
+                let vis = fn_info.public;
+                quote! {
+                    #[allow(non_camel_case_types,non_snake_case)]
+                    #vis struct #added_unit;
+                    #[allow(non_camel_case_types,non_snake_case)]
+                    #vis struct #empty_unit;
+                }
             };
-
-            let final_call = final_call(
-                &struct_name,
-                &argument_vector,
-                &func.sig.output,
-                &added_unit,
-                &generics,
-                &attr_options,
-            );
-
-            let argument_calls = argument_calls(
-                &struct_name,
-                &argument_vector,
-                &added_unit,
-                &empty_unit,
-                func_out,
-                &generics,
-                &attr_options,
-            );
 
             // assemble output
             let mut out = proc_macro2::TokenStream::new();
@@ -126,19 +91,19 @@ fn impl_signature<'a>(
 /// Generates the methods used to add argument values to a partially applied function. One method is generate for each
 /// argument and each method is contained in it's own impl block.
 fn argument_calls<'a>(
-    struct_name: &syn::Ident,
-    args: &Vec<&syn::PatType>,
-    unit_added: &syn::Ident,
-    unit_empty: &syn::Ident,
-    ret_type: &'a syn::ReturnType,
-    generics: &Vec<&syn::GenericParam>,
+    fn_info: &FunctionInformation,
     opts: &MacroOptions,
 ) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type, generics, opts);
-    let arg_name_vec = arg_names(args);
+    let impl_sig = impl_signature(
+        &fn_info.argument_vec,
+        fn_info.ret_type,
+        &fn_info.generics,
+        opts,
+    );
+    let arg_name_vec = arg_names(&fn_info.argument_vec);
     let aug_arg_names = augmented_argument_names(&arg_name_vec);
-    let arg_types = arg_types(&args);
-    arg_names(args)
+    let arg_types = arg_types(&fn_info.argument_vec);
+    arg_names(&fn_info.argument_vec)
         .into_iter()
         .zip(&aug_arg_names)
         .zip(arg_types)
@@ -149,7 +114,7 @@ fn argument_calls<'a>(
                 .iter()
                 .map(|x| {
                     if &n == x {
-                        unit_added.clone()
+                        fn_info.unit.added.clone()
                     } else {
                         x.clone()
                     }
@@ -162,7 +127,13 @@ fn argument_calls<'a>(
             };
             let associated_vals_in: Vec<_> = associated_vals_out
                 .iter()
-                .map(|x| if x == unit_added { unit_empty } else { x })
+                .map(|x| {
+                    if x == &fn_info.unit.added {
+                        &fn_info.unit.empty
+                    } else {
+                        x
+                    }
+                })
                 .collect();
             let val_list_in = if opts.impl_poly || opts.by_value {
                 quote! {#(#associated_vals_in,)*}
@@ -188,12 +159,15 @@ fn argument_calls<'a>(
             } else {
                 quote! { #n_fn }
             };
+            let struct_name = &fn_info.struct_name;
+            let generics = &fn_info.generics;
+            let vis = fn_info.public;
             quote! {
                 #[allow(non_camel_case_types,non_snake_case)]
                 impl< #impl_sig, #(#free_vars,)* > // The impl signature
                     #struct_name<#(#generics,)* #val_list_in BODYFN> // The struct signature
                 {
-                    fn #n (mut self, #n: #in_type) ->
+                    #vis fn #n (mut self, #n: #in_type) ->
                         #struct_name<#(#generics,)* #val_list_out BODYFN>{
                         self.#n = #some;
                         unsafe {
@@ -210,17 +184,15 @@ fn argument_calls<'a>(
 }
 
 /// Generates the call function, which executes a fully filled out partially applicable struct.
-fn final_call<'a>(
-    struct_name: &syn::Ident,
-    args: &Vec<&syn::PatType>,
-    ret_type: &'a syn::ReturnType,
-    unit_added: &'a syn::Ident,
-    generics: &Vec<&syn::GenericParam>,
-    opts: &MacroOptions,
-) -> proc_macro2::TokenStream {
-    let impl_sig = impl_signature(args, ret_type, generics, opts);
-    let arg_names = arg_names(args);
+fn final_call<'a>(fn_info: &FunctionInformation, opts: &MacroOptions) -> proc_macro2::TokenStream {
+    let ret_type = fn_info.ret_type;
+    let generics = &fn_info.generics;
+    let unit_added = &fn_info.unit.added;
+    let struct_name = &fn_info.struct_name;
+    let impl_sig = impl_signature(&fn_info.argument_vec, ret_type, generics, opts);
+    let arg_names = arg_names(&fn_info.argument_vec);
     let aug_args = augmented_argument_names(&arg_names);
+    let vis = fn_info.public;
     let arg_list: proc_macro2::TokenStream = if opts.impl_poly || opts.by_value {
         aug_args.iter().map(|_| quote! {#unit_added,}).collect()
     } else {
@@ -237,7 +209,7 @@ fn final_call<'a>(
             // struct signature
             #struct_name<#(#generics,)* #arg_list BODYFN>
         {
-            fn call(self) #ret_type { // final call
+            #vis fn call(self) #ret_type { // final call
                 (self.body)(#(self.#arg_names.unwrap()#call,)*)
             }
         }
@@ -247,18 +219,21 @@ fn final_call<'a>(
 /// The function called by the user to create an instance of a partially applicable function. This function always has
 /// the name of the original function the macro is called on.
 fn generator_func<'a>(
-    struct_name: &'a syn::Ident,
-    name: &'a syn::Ident,
-    args: &Vec<&syn::PatType>,
-    ret_type: &'a syn::ReturnType,
-    empty_unit: &'a syn::Ident,
-    body: &'a Box<syn::Block>,
-    generics: &Vec<&syn::GenericParam>,
+    fn_info: &FunctionInformation,
     opts: &MacroOptions,
 ) -> proc_macro2::TokenStream {
-    let arg_names = arg_names(&args);
-    let arg_types = arg_types(&args);
+    // because the quote! macro cannot expand fields
+    let arg_names = arg_names(&fn_info.argument_vec);
+    let arg_types = arg_types(&fn_info.argument_vec);
     let marker_names = marker_names(&arg_names);
+    let generics = &fn_info.generics;
+    let empty_unit = &fn_info.unit.empty;
+    let body = fn_info.block;
+    let name = fn_info.fn_name;
+    let struct_name = &fn_info.struct_name;
+    let ret_type = fn_info.ret_type;
+    let vis = fn_info.public;
+
     let gen_types = if opts.impl_poly || opts.by_value {
         quote! {#(#generics,)*}
     } else {
@@ -284,7 +259,7 @@ fn generator_func<'a>(
     };
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
-        fn #name<#gen_types>() -> #struct_name<#(#generics,)* #struct_types
+        #vis fn #name<#gen_types>() -> #struct_name<#(#generics,)* #struct_types
         impl Fn(#(#arg_types,)*) #ret_type>
             #where_clause
         {
@@ -317,18 +292,6 @@ fn marker_names(names: &Vec<syn::Ident>) -> Vec<syn::Ident> {
 fn concat_ident<'a>(ident: &'a syn::Ident, end: &str) -> syn::Ident {
     let name = format!("{}___{}", quote! {#ident}, end);
     syn::Ident::new(&name, ident.span())
-}
-
-/// Gets the name a of function.
-fn get_name<'a>(func: &'a syn::ItemFn) -> &'a syn::Ident {
-    // TODO: move this check somewhere else
-    if let Some(r) = &func.sig.receiver() {
-        r.span()
-            .unstable()
-            .error("Cannot make methods partially applicable yet")
-            .emit();
-    }
-    &func.sig.ident
 }
 
 /// Filter an argument list to a pattern type
@@ -366,17 +329,12 @@ fn augmented_argument_names<'a>(arg_names: &Vec<syn::Ident>) -> Vec<syn::Ident> 
 
 /// Generates the main struct for the partially applicable function.
 /// All other functions are methods on this struct.
-fn main_struct<'a>(
-    name: &'a syn::Ident,
-    args: &Vec<&syn::PatType>,
-    ret_type: &'a syn::ReturnType,
-    generics: &Vec<&syn::GenericParam>,
-    opts: &MacroOptions,
-) -> proc_macro2::TokenStream {
-    let arg_types = arg_types(&args);
+fn main_struct<'a>(fn_info: &FunctionInformation, opts: &MacroOptions) -> proc_macro2::TokenStream {
+    let arg_types = arg_types(&fn_info.argument_vec);
 
-    let arg_names = arg_names(&args);
+    let arg_names = arg_names(&fn_info.argument_vec);
     let arg_augmented = augmented_argument_names(&arg_names);
+    let ret_type = fn_info.ret_type;
 
     let arg_list: Vec<_> = if !(opts.impl_poly || opts.by_value) {
         arg_names
@@ -408,9 +366,15 @@ fn main_struct<'a>(
     } else {
         quote! {#(#arg_names: Option<#arg_augmented>,)*}
     };
+    let name = &fn_info.struct_name;
 
     let clone = if opts.impl_clone {
-        let sig = impl_signature(args, ret_type, generics, opts);
+        let sig = impl_signature(
+            &fn_info.argument_vec,
+            fn_info.ret_type,
+            &fn_info.generics,
+            opts,
+        );
         quote! {
             #[allow(non_camel_case_types,non_snake_case)]
             impl<#sig, #(#arg_list,)*> ::std::clone::Clone for #name <#(#arg_list,)* BODYFN>
@@ -428,10 +392,11 @@ fn main_struct<'a>(
     } else {
         quote! {}
     };
-
+    let generics = &fn_info.generics;
+    let vis = fn_info.public;
     quote! {
         #[allow(non_camel_case_types,non_snake_case)]
-        struct #name <#(#generics,)* #(#arg_list,)*BODYFN>
+        #vis struct #name <#(#generics,)* #(#arg_list,)*BODYFN>
         where #where_clause
         {
             // These hold the (phantom) types which represent if a field has
@@ -497,6 +462,56 @@ impl MacroOptions {
                     r#"Unknown attribute. Acceptable attributes are "poly", "Clone" and "value""#,
                 )
                 .emit()
+        }
+    }
+}
+
+/// Contains prepossesses information about
+struct FunctionInformation<'a> {
+    argument_vec: Vec<&'a syn::PatType>,
+    ret_type: &'a syn::ReturnType,
+    generics: Vec<&'a syn::GenericParam>,
+    fn_name: &'a syn::Ident,
+    struct_name: syn::Ident,
+    unit: Units,
+    block: &'a syn::Block,
+    public: &'a syn::Visibility,
+    orignal_fn: &'a syn::ItemFn,
+}
+
+/// Contains Idents for the unit structs
+struct Units {
+    added: syn::Ident,
+    empty: syn::Ident,
+}
+
+impl<'a> FunctionInformation<'a> {
+    fn from(func: &'a syn::ItemFn) -> Self {
+        let func_name = &func.sig.ident;
+        Self {
+            argument_vec: argument_vector(&func.sig.inputs),
+            ret_type: &func.sig.output,
+            generics: func.sig.generics.params.iter().map(|f| f).collect(),
+            fn_name: func_name,
+            struct_name: syn::Ident::new(
+                &format!("__PartialApplication__{}_", func_name),
+                func_name.span(),
+            ),
+            unit: Units {
+                added: concat_ident(func_name, "Added"),
+                empty: concat_ident(func_name, "Empty"),
+            },
+            block: &func.block,
+            public: &func.vis,
+            orignal_fn: func,
+        }
+    }
+    fn check(&self) {
+        if let Some(r) = self.orignal_fn.sig.receiver() {
+            r.span()
+                .unstable()
+                .error("Cannot make methods partially applicable yet")
+                .emit();
         }
     }
 }
