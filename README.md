@@ -1,4 +1,4 @@
-# Sketch for a macro to make functions partially applicable
+# Macro to make functions partially applicable
 
 ## Example
 ``` rust
@@ -12,8 +12,8 @@ fn main() {
 }
 ```
 
-The idea is to define a macro to turn a function into an partial application
-supporting struct. This would look somthing like
+The idea is to define a macro to turn a function into a partial application
+supporting struct. This would look something like
 
 ``` rust
 #[part_app]
@@ -29,7 +29,7 @@ fn main() {
 }
 ```
 
-The `#[part_app]` would expand into somthing like this (edited for brevity). 
+The `#[part_app]` would expand into something like this (edited for brevity). 
 
 ``` rust
 struct add___Added;
@@ -110,7 +110,7 @@ impl<xFN: FnOnce() -> u32, yFN: FnOnce() -> u32, BODYFN: FnOnce(u32, u32) -> i64
 Importantly, this would be a zero-cost abstraction. In theory, the `Option`s
 will be removed because they are not checked against. The `FnOnce` can be
 optimized out (as it's just the compiler manipulating the syntax tree) so then
-the struct holds no unoptimizable data. This means it's size should be
+the struct holds no unoptimizable data. This means its size should be
 effectively 0, and thus it will be optimized away.
 
 ## How it works
@@ -118,8 +118,8 @@ The macro creates a function which produces a builder pattern like struct. The
 struct is parameterized by which variables are defined. Defining a variable is
 only implemented for the struct if that variable is not already defined. The
 final call is defined only when each variable is itself defined. A variable is
-marked as defined if it's place paramater is of type `Added`. It is marked as
-undefined when it's place is parameterized by type `Empty`. 
+marked as defined if its place paramater is of type `Added`. It is marked as
+undefined when its place is parameterized by type `Empty`. 
 
 ## Limitations
 In an effort to make this as optimizable as possible, I avoid any heap
@@ -129,6 +129,3 @@ also prevents copying. To avoid this, adding the attribute `poly` enables heap
 allocation and thus all closures with the same trait are equally acceptable. The
 attribute `Clone` enables partially constructed functions to be cloned before
 they are called. `value` enables passing in values instead of structs. 
-
-## Next
-I could also cleanup my code significantly.
