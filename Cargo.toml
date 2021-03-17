@@ -1,13 +1,13 @@
 [package]
-name = "ea"
+name = "eu"
 version = "0.1.0"
 authors = ["iwahbe <ian@wahbe.com>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
 keywords = ["partial-application", "macro","functional"]
-description = "ea is a macro to transform functions into partially applicable structs"
+description = "eu is a macro to transform functions into partially applicable structs"
 readme = "README.md"
-repository = "https://github.com/yuulive/ea"
+repository = "https://github.com/yuulive/eu"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

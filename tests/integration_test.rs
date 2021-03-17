@@ -1,4 +1,4 @@
-use ea::part_app;
+use eu::part_app;
 
 #[part_app(poly, Clone)]
 pub fn foo(bar: u32, baz: u64) -> i16 {
